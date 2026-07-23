@@ -1,0 +1,11 @@
+[Bb]in/
+[Oo]bj/
+*.user
+*.userosscache
+*.sln.docstates
+
+.vs/
+.idea/
+.vscode/
+
+*.zip

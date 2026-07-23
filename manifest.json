@@ -1,0 +1,9 @@
+{
+  "name": "AtlyssAttackSounds",
+  "version_number": "1.0.0",
+  "website_url": "https://github.com/Scrithor/AtlyssAttackSounds",
+  "description": "Dynamic attack audio trigger mod for ATLYSS with weighted sound pools, particle systems, and procedural bone deformation physics.",
+  "dependencies": [
+    "BepInEx-BepInExPack-5.4.2100"
+  ]
+}
