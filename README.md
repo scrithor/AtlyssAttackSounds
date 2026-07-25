@@ -1,23 +1,32 @@
 # AtlyssAttackSounds
-### Version 1.0.0
+### Version 1.1.0
 
 ### **Description**
 
 This mod adds custom plap attack sounds triggered by weighted probabilities. Players can customize the sounds by replacing the audio files in the mod folder. The rare event? A fart.
 
+### **Changelog - v1.1.0**
+
+- **In-Game Settings Menu:** Press **F7** to open a dynamic settings overlay.
+  - **Volume Controls:** Adjust individual volume levels for `Fast`, `Medium`, and `Slow` audio categories.
+  - **Proc Chance Sliders:** Customize relative weight chances for each sound trigger.
+  - **Visual & Physics Tweaks:** Adjust ass bone jiggle intensity and particle size on the fly.
+- **Improved Particle Physics:** Particle effects now attach directly to the player character, continuously following movement until they fade out instead of remaining static in the world.
+
 ### **Features**
 
 - **Dynamic Audio Injection:** Intercepts the *PlayerCombat.Init_Attack* method of the local player *Player._mainPlayer* and plays sounds.
 - **Weighted Rarity System:** Stochastic audio selection divided by categories based on configurable probabilities:
-  - **Fast:** `84%` trigger chance (fast combat sounds).
-  - **Medium:** `14%` trigger chance (intermediate sounds).
-  - **Slow:** `2%` trigger chance (rare events).
-- **Ass Bone Physics:** It jiggles your character's butt.
-- **Particle Emission:** Particles? Yeeeeeeee
+  - **Fast:** Default `84%` trigger chance (fast combat sounds).
+  - **Medium:** Default `12%` trigger chance (intermediate sounds).
+  - **Slow:** Default `4%` trigger chance (rare events).
+- **Ass Bone Physics:** Jiggles your character's butt on attack, with configurable intensity.
+- **Dynamic Particle Emission:** Emits particles that seamlessly move with the player.
 - **Audio Concurrency Prevention:** Cooldown time management based on the exact duration of the played file to prevent messy overlapping (audio clipping). 
 
 ### **Tip**
 
+- Press **F7** in-game to configure audio volumes, proc chances, and visual effect scales.
 - When you want to replace the audio, prefer using .wav and .ogg files for trouble-free playback.
 
 ### **About This Project**

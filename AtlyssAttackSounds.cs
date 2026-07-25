@@ -12,6 +12,8 @@ using UnityEngine.Networking;
 
 namespace AtlyssAttackSounds
 {
+    #region Sound Categories
+
     public enum SoundCategory
     {
         Fast,
@@ -19,21 +21,32 @@ namespace AtlyssAttackSounds
         Slow
     }
 
+    #endregion
+
+    #region Jiggle Controller
+
     public class JiggleController : MonoBehaviour
     {
+        private const float DURATION = 0.5f;
+
         private Transform[] bones;
-        private readonly Dictionary<Transform, Vector3> originalScales = new Dictionary<Transform, Vector3>();
-        private float duration = 0.5f;
+        private Dictionary<Transform, Vector3> originalScales;
         private float elapsed;
-        private float intensity = 1.5f;
+        private float intensity;
+        private Vector3 currentScaleOffset;
 
         public void Init(Transform[] assBones, float jiggleIntensity)
         {
+            if (bones != null && originalScales != null)
+            {
+                ResetBones();
+            }
+
             bones = assBones;
             intensity = jiggleIntensity;
             elapsed = 0f;
 
-            originalScales.Clear();
+            originalScales = new Dictionary<Transform, Vector3>(bones.Length);
             foreach (Transform b in bones)
             {
                 if (b != null && !originalScales.ContainsKey(b))
@@ -48,27 +61,33 @@ namespace AtlyssAttackSounds
             if (bones == null || bones.Length == 0) return;
 
             elapsed += Time.deltaTime;
-            if (elapsed >= duration)
+            if (elapsed >= DURATION)
             {
                 ResetBones();
                 Destroy(this);
                 return;
             }
 
-            float progress = elapsed / duration;
+            float progress = elapsed / DURATION;
             float scaleOffset = Mathf.Sin(progress * Mathf.PI * 4f) * (1f - progress) * (0.25f * intensity);
+            
+            currentScaleOffset.x = scaleOffset;
+            currentScaleOffset.y = scaleOffset;
+            currentScaleOffset.z = scaleOffset;
 
             foreach (KeyValuePair<Transform, Vector3> kvp in originalScales)
             {
                 if (kvp.Key != null)
                 {
-                    kvp.Key.localScale = kvp.Value + new Vector3(scaleOffset, scaleOffset, scaleOffset);
+                    kvp.Key.localScale = kvp.Value + currentScaleOffset;
                 }
             }
         }
 
-        private void ResetBones()
+        public void ResetBones()
         {
+            if (originalScales == null) return;
+
             foreach (KeyValuePair<Transform, Vector3> kvp in originalScales)
             {
                 if (kvp.Key != null)
@@ -77,26 +96,50 @@ namespace AtlyssAttackSounds
                 }
             }
         }
+
+        private void OnDestroy()
+        {
+            ResetBones();
+        }
     }
+
+    #endregion
+
+    #region Main Plugin Class
 
     [BepInPlugin(GUID, NAME, VERSION)]
     public class AtlyssAttackSoundsMod : BaseUnityPlugin
     {
         public const string GUID = "scrithor_Atlyss.Attack.Sounds";
         public const string NAME = "AtlyssAttackSounds";
-        public const string VERSION = "1.0.0";
+        public const string VERSION = "1.1.0";
+
+        public const float COOLDOWN_BUFFER = 0.2f;
 
         public static bool FORCE_SLOW_TEST_MODE = false;
 
         public static ManualLogSource logger;
         public static AtlyssAttackSoundsMod Instance { get; private set; }
 
+        #region Config Entries
+
         public static ConfigEntry<float> volumeFastConfig;
         public static ConfigEntry<float> volumeMediumConfig;
         public static ConfigEntry<float> volumeSlowConfig;
+
+        public static ConfigEntry<float> chanceFastConfig;
+        public static ConfigEntry<float> chanceMediumConfig;
+        public static ConfigEntry<float> chanceSlowConfig;
+
         public static ConfigEntry<float> jiggleIntensityConfig;
         public static ConfigEntry<float> particleSizeConfig;
         public static ConfigEntry<string> particleStartColorsConfig;
+
+        private static ConfigEntry<KeyboardShortcut> toggleMenuKeyConfig;
+
+        #endregion
+
+        #region Fields
 
         private static readonly Dictionary<SoundCategory, List<AudioClip>> categoryClips = new Dictionary<SoundCategory, List<AudioClip>>()
         {
@@ -105,25 +148,37 @@ namespace AtlyssAttackSounds
             { SoundCategory.Slow, new List<AudioClip>() }
         };
 
+        private static readonly string[] EXACT_BONE_NAMES = new string[]
+        {
+            "assbase.l", "assbase.r", "butt.l", "butt.r",
+            "butt_l", "butt_r", "glute.l", "glute.r",
+            "cheek.l", "cheek.r", "ass.l", "ass.r",
+            "b_ass_L", "b_ass_R", "b_butt_L", "b_butt_R"
+        };
+
+        private static readonly string[] FORBIDDEN_BONE_KEYWORDS = new string[]
+        {
+            "root", "master", "pelvis", "hip", "body",
+            "chassis", "armature", "player", "spine", "torso", "thigh"
+        };
+
         private static GameObject particlePrefab;
         private static readonly System.Random random = new System.Random();
-        private Harmony harmony;
-
         private static float nextAllowedTime;
-        private const float COOLDOWN_BUFFER = 0.2f;
+
+        private Harmony harmony;
+        private bool wasToggleKeyPressed;
+
+        #endregion
+
+        #region Unity Lifecycle
 
         private void Awake()
         {
             Instance = this;
             logger = Logger;
 
-            volumeFastConfig = Config.Bind("Audio Volumes", "Volume_Fast", 1.0f, new ConfigDescription("Fast audio volume.", new AcceptableValueRange<float>(0.0f, 1.0f)));
-            volumeMediumConfig = Config.Bind("Audio Volumes", "Volume_Medium", 0.25f, new ConfigDescription("Medium audio volume.", new AcceptableValueRange<float>(0.0f, 1.0f)));
-            volumeSlowConfig = Config.Bind("Audio Volumes", "Volume_Slow", 0.3f, new ConfigDescription("Slow audio volume.", new AcceptableValueRange<float>(0.0f, 1.0f)));
-
-            jiggleIntensityConfig = Config.Bind("Effects", "JiggleIntensity", 1.5f, new ConfigDescription("Intensity of physical bone deformation.", new AcceptableValueRange<float>(0.0f, 5.0f)));
-            particleSizeConfig = Config.Bind("Effects", "ParticleSize", 0.2f, new ConfigDescription("Particle size distribution.", new AcceptableValueRange<float>(0.01f, 2.0f)));
-            particleStartColorsConfig = Config.Bind("Effects", "ParticleStartColors", "CFFF4E, 77F131, 349300", "Initial colors in Hexadecimal.");
+            InitConfiguration();
 
             string pluginDir = Path.GetDirectoryName(Info.Location);
             string soundsDir = Path.Combine(pluginDir, "sounds");
@@ -139,12 +194,66 @@ namespace AtlyssAttackSounds
             harmony = new Harmony(GUID);
             harmony.PatchAll(typeof(AtlyssAttackSoundsMod).Assembly);
 
-            logger.LogInfo($"{NAME} v{VERSION} initialized successfully.");
+            logger.LogInfo($"{NAME} v{VERSION} initialized.");
+        }
+
+        private void Start()
+        {
+            SettingsUI.Initialize(
+                volumeFastConfig, volumeMediumConfig, volumeSlowConfig,
+                chanceFastConfig, chanceMediumConfig, chanceSlowConfig,
+                jiggleIntensityConfig, particleSizeConfig
+            );
+        }
+
+        private void Update()
+        {
+            HandleSettingsToggle();
         }
 
         private void OnDestroy()
         {
+            UnloadAudioClips();
             harmony?.UnpatchSelf();
+        }
+
+        #endregion
+
+        #region Input Handling
+
+        private void HandleSettingsToggle()
+        {
+            KeyboardShortcut toggleKey = toggleMenuKeyConfig?.Value ?? new KeyboardShortcut(KeyCode.F7);
+            bool keyDown = toggleKey.IsDown();
+
+            if (keyDown && !wasToggleKeyPressed)
+            {
+                wasToggleKeyPressed = true;
+                SettingsUI.ToggleVisible();
+            }
+            else if (!keyDown)
+            {
+                wasToggleKeyPressed = false;
+            }
+        }
+
+        #endregion
+
+        private void InitConfiguration()
+        {
+            volumeFastConfig = Config.Bind("Audio Volumes", "Volume_Fast", 1.0f, new ConfigDescription("Fast audio volume.", new AcceptableValueRange<float>(0.0f, 1.0f)));
+            volumeMediumConfig = Config.Bind("Audio Volumes", "Volume_Medium", 0.25f, new ConfigDescription("Medium audio volume.", new AcceptableValueRange<float>(0.0f, 1.0f)));
+            volumeSlowConfig = Config.Bind("Audio Volumes", "Volume_Slow", 0.3f, new ConfigDescription("Slow audio volume.", new AcceptableValueRange<float>(0.0f, 1.0f)));
+
+            chanceFastConfig = Config.Bind("Proc Chances", "Chance_Fast", 84.0f, new ConfigDescription("Relative weight for Fast sounds.", new AcceptableValueRange<float>(0.0f, 100.0f)));
+            chanceMediumConfig = Config.Bind("Proc Chances", "Chance_Medium", 12.0f, new ConfigDescription("Relative weight for Medium sounds.", new AcceptableValueRange<float>(0.0f, 100.0f)));
+            chanceSlowConfig = Config.Bind("Proc Chances", "Chance_Slow", 4.0f, new ConfigDescription("Relative weight for Slow sounds.", new AcceptableValueRange<float>(0.0f, 100.0f)));
+
+            jiggleIntensityConfig = Config.Bind("Effects", "JiggleIntensity", 1.5f, new ConfigDescription("Intensity of physical bone deformation.", new AcceptableValueRange<float>(0.0f, 5.0f)));
+            particleSizeConfig = Config.Bind("Effects", "ParticleSize", 0.2f, new ConfigDescription("Particle size distribution.", new AcceptableValueRange<float>(0.01f, 2.0f)));
+            particleStartColorsConfig = Config.Bind("Effects", "ParticleStartColors", "CFFF4E, 77F131, 349300", "Initial colors in Hexadecimal.");
+
+            toggleMenuKeyConfig = Config.Bind("Settings Menu", "ToggleMenuKey", new KeyboardShortcut(KeyCode.F7), "Key to open/close the settings menu.");
         }
 
         private void LoadAssetBundle(string bundlePath)
@@ -185,12 +294,9 @@ namespace AtlyssAttackSounds
 
         private IEnumerator LoadAudioFiles(string directoryPath)
         {
-            string[] files = Directory.GetFiles(directoryPath, "*.*", SearchOption.AllDirectories);
+            UnloadAudioClips();
 
-            foreach (List<AudioClip> list in categoryClips.Values)
-            {
-                list.Clear();
-            }
+            string[] files = Directory.GetFiles(directoryPath, "*.*", SearchOption.AllDirectories);
 
             foreach (string filePath in files)
             {
@@ -220,6 +326,21 @@ namespace AtlyssAttackSounds
                         categoryClips[category].Add(clip);
                     }
                 }
+            }
+        }
+
+        private void UnloadAudioClips()
+        {
+            foreach (List<AudioClip> list in categoryClips.Values)
+            {
+                foreach (AudioClip clip in list)
+                {
+                    if (clip != null)
+                    {
+                        Destroy(clip);
+                    }
+                }
+                list.Clear();
             }
         }
 
@@ -277,7 +398,11 @@ namespace AtlyssAttackSounds
 
             AudioClip selectedClip = pool[random.Next(pool.Count)];
 
-            AudioSource source = player.gameObject.GetComponent<AudioSource>();
+            AudioSource source = player.GetComponent<AudioSource>();
+            if (source == null)
+            {
+                source = player.GetComponentInChildren<AudioSource>();
+            }
             if (source == null)
             {
                 source = player.gameObject.AddComponent<AudioSource>();
@@ -287,15 +412,32 @@ namespace AtlyssAttackSounds
             float targetVolume = GetVolumeForCategory(targetCategory);
             source.PlayOneShot(selectedClip, targetVolume);
 
+            TriggerJiggleEffect(player);
+
             if (targetCategory == SoundCategory.Slow)
             {
-                TriggerSlowEffects(player);
+                TriggerParticleEffect(player);
             }
 
             return selectedClip.length + COOLDOWN_BUFFER;
         }
 
-        private static void TriggerSlowEffects(Player player)
+        private static void TriggerJiggleEffect(Player player)
+        {
+            Transform[] assBones = FindAssBones(player.transform);
+
+            if (assBones.Length > 0)
+            {
+                JiggleController jiggle = player.gameObject.GetComponent<JiggleController>();
+                if (jiggle == null)
+                {
+                    jiggle = player.gameObject.AddComponent<JiggleController>();
+                }
+                jiggle.Init(assBones, jiggleIntensityConfig.Value);
+            }
+        }
+
+        private static void TriggerParticleEffect(Player player)
         {
             Transform[] assBones = FindAssBones(player.transform);
 
@@ -309,35 +451,61 @@ namespace AtlyssAttackSounds
 
                 GameObject particleObj = Instantiate(particlePrefab, spawnPosition, Quaternion.identity);
                 particleObj.transform.localScale = Vector3.one * particleSizeConfig.Value;
+
+                particleObj.transform.SetParent(player.transform, true);
                 particleObj.SetActive(true);
 
                 ParticleSystem ps = particleObj.GetComponentInChildren<ParticleSystem>(true);
                 if (ps != null)
                 {
+                    ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+
                     ParticleSystem.MainModule main = ps.main;
-                    main.simulationSpace = ParticleSystemSimulationSpace.World;
-                    
-                    main.duration = 2.0f;
-                    main.startLifetime = 2.0f;
+                    main.simulationSpace = ParticleSystemSimulationSpace.Local;
+                    main.duration = 1.7f;
+                    main.startLifetime = 1.7f;
+                    main.startSpeed = 1.0f;
+                    main.gravityModifier = 0f;
+                    main.loop = false;
+                    main.playOnAwake = false;
 
                     Color color = ParseColor(particleStartColorsConfig.Value.Split(',')[0], Color.green);
                     main.startColor = new ParticleSystem.MinMaxGradient(color);
 
+                    ParticleSystem.ColorOverLifetimeModule col = ps.colorOverLifetime;
+                    col.enabled = true;
+
+                    Gradient grad = new Gradient();
+                    float fadeStart = 0.9f / 1.7f;
+                    grad.SetKeys(
+                        new GradientColorKey[] {
+                            new GradientColorKey(Color.white, 0f),
+                            new GradientColorKey(Color.white, 1f)
+                        },
+                        new GradientAlphaKey[] {
+                            new GradientAlphaKey(1f, 0f),
+                            new GradientAlphaKey(1f, fadeStart),
+                            new GradientAlphaKey(0f, 1f)
+                        }
+                    );
+                    col.color = new ParticleSystem.MinMaxGradient(grad);
+
+                    ParticleSystem.SizeOverLifetimeModule sol = ps.sizeOverLifetime;
+                    sol.enabled = true;
+                    AnimationCurve sizeCurve = new AnimationCurve();
+                    sizeCurve.AddKey(0f, 1f);
+                    sizeCurve.AddKey(fadeStart, 1f);
+                    sizeCurve.AddKey(1f, 0.2f);
+                    sol.size = new ParticleSystem.MinMaxCurve(1f, sizeCurve);
+
+                    ps.Clear(true);
                     ps.Play();
                     ps.Emit(30);
+
+                    logger.LogInfo($"[PARTICLE] Emitted with fade: dur={main.duration}, lifetime={main.startLifetime}, fadeStart={fadeStart}");
                 }
 
-                Destroy(particleObj, 2.2f);
-            }
-
-            if (assBones.Length > 0)
-            {
-                JiggleController jiggle = player.gameObject.GetComponent<JiggleController>();
-                if (jiggle == null)
-                {
-                    jiggle = player.gameObject.AddComponent<JiggleController>();
-                }
-                jiggle.Init(assBones, jiggleIntensityConfig.Value);
+                Destroy(particleObj, 1.8f);
             }
         }
 
@@ -349,24 +517,6 @@ namespace AtlyssAttackSounds
 
         private static Transform[] FindAssBones(Transform root)
         {
-            string[] exactBoneNames = new string[] 
-            { 
-                "assbase.l", "assbase.r", 
-                "butt.l", "butt.r", 
-                "butt_l", "butt_r", 
-                "glute.l", "glute.r", 
-                "cheek.l", "cheek.r", 
-                "ass.l", "ass.r",
-                "b_ass_L", "b_ass_R",
-                "b_butt_L", "b_butt_R"
-            };
-
-            string[] forbiddenKeywords = new string[] 
-            { 
-                "root", "master", "pelvis", "hip", "body", 
-                "chassis", "armature", "player", "spine", "torso", "thigh" 
-            };
-
             List<Transform> foundBones = new List<Transform>();
             Transform[] allTransforms = root.GetComponentsInChildren<Transform>(true);
 
@@ -376,16 +526,13 @@ namespace AtlyssAttackSounds
 
                 string lowerName = t.name.ToLower();
 
-                if (forbiddenKeywords.Any(keyword => lowerName.Contains(keyword))) continue;
+                if (FORBIDDEN_BONE_KEYWORDS.Any(keyword => lowerName.Contains(keyword))) continue;
 
-                foreach (string target in exactBoneNames)
+                foreach (string target in EXACT_BONE_NAMES)
                 {
-                    if (lowerName.Equals(target, StringComparison.OrdinalIgnoreCase))
+                    if (lowerName.Equals(target, StringComparison.OrdinalIgnoreCase) && !foundBones.Contains(t))
                     {
-                        if (!foundBones.Contains(t))
-                        {
-                            foundBones.Add(t);
-                        }
+                        foundBones.Add(t);
                     }
                 }
             }
@@ -395,12 +542,20 @@ namespace AtlyssAttackSounds
 
         private static SoundCategory SelectCategoryByRarity()
         {
-            double roll = random.NextDouble();
+            float weightFast = Mathf.Max(0f, chanceFastConfig.Value);
+            float weightMedium = Mathf.Max(0f, chanceMediumConfig.Value);
+            float weightSlow = Mathf.Max(0f, chanceSlowConfig.Value);
 
-            if (roll < 0.84) return SoundCategory.Fast;   // 84% de chance
-            if (roll < 0.98) return SoundCategory.Medium; // 14% de chance
+            float totalWeight = weightFast + weightMedium + weightSlow;
 
-            return SoundCategory.Slow;                   // 2% de chance
+            if (totalWeight <= 0f) return SoundCategory.Fast;
+
+            double roll = random.NextDouble() * totalWeight;
+
+            if (roll < weightFast) return SoundCategory.Fast;
+            if (roll < weightFast + weightMedium) return SoundCategory.Medium;
+
+            return SoundCategory.Slow;
         }
 
         private static float GetVolumeForCategory(SoundCategory category)
@@ -412,5 +567,7 @@ namespace AtlyssAttackSounds
                 _ => Mathf.Clamp(volumeFastConfig.Value, 0.0f, 1.0f),
             };
         }
+
+        #endregion
     }
 }
