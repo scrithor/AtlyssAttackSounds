@@ -1,9 +1,15 @@
 # AtlyssAttackSounds
-### Version 1.1.0
+### Version 1.1.1
 
 ### **Description**
 
 This mod adds custom plap attack sounds triggered by weighted probabilities. Players can customize the sounds by replacing the audio files in the mod folder. The rare event? A fart.
+
+### **Changelog - v1.1.1**
+
+- **Audio System Fixes:** Updated audio files and resolved playback failure issues.
+- **Animation Timing Sync:** Sounds now play at the end of the attack animation instead of triggering before it starts.
+- **Continuous Input Support:** Holding down the attack button now correctly triggers multiple sounds across consecutive attacks (You're welcome, katar users!).
 
 ### **Changelog - v1.1.0**
 
@@ -28,16 +34,17 @@ This mod adds custom plap attack sounds triggered by weighted probabilities. Pla
 
 - Press **F7** in-game to configure audio volumes, proc chances, and visual effect scales.
 - When you want to replace the audio, prefer using .wav and .ogg files for trouble-free playback.
+- You can edit the attack sound delay in the `.cfg` file to fit custom weapons by modifying values that follow this pattern: `Bow_Grounded = 0.366`.
 
 ### **About This Project**
 
 This mod started out of pure curiosity. I wanted to understand how [*TransientGuy's AtlyssFartMod*](https://thunderstore.io/c/atlyss/p/TransientGuy/AtlyssFartMod/) worked under the hood. After digging through the code and assets, I felt inspired to create my own version. Using the original mod's files as a foundation, I developed this project. A tribute to both the learning journey and the creativity that modding encourages. I hope this project brings everyone as much fun as it brings me.
 
 ### **Credits**
- - Thank you **TransientGuy** for the original mod! 
+ - Thank you **TransientGuy** for the original mod!
  - [*TransientGuy's GitHub*](https://github.com/transientguy/AtlyssFartMod) | [*TransientGuy Mod*](https://thunderstore.io/c/atlyss/p/TransientGuy/AtlyssFartMod/)
  - A big thank you to everyone who teaches for free online using videos, text, and audio! You all form the foundation of knowledge on the internet.
 
 ### **Contact**
-If you have any problems or questions about this mod, feel free to contact me at:
+If you have any problems, questions or any idea about this mod, feel free to contact me at:
 - **Discord:** @scrithor

@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
@@ -70,7 +71,7 @@ namespace AtlyssAttackSounds
 
             float progress = elapsed / DURATION;
             float scaleOffset = Mathf.Sin(progress * Mathf.PI * 4f) * (1f - progress) * (0.25f * intensity);
-            
+
             currentScaleOffset.x = scaleOffset;
             currentScaleOffset.y = scaleOffset;
             currentScaleOffset.z = scaleOffset;
@@ -103,6 +104,56 @@ namespace AtlyssAttackSounds
         }
     }
 
+    public class AttackAudioPool : MonoBehaviour
+    {
+        private const int DEFAULT_POOL_SIZE = 6;
+
+        private readonly List<AudioSource> sources = new List<AudioSource>();
+        private int nextIndex;
+
+        public AudioSource GetSource()
+        {
+            EnsureInitialized();
+
+            foreach (AudioSource source in sources)
+            {
+                if (source != null && !source.isPlaying)
+                {
+                    return source;
+                }
+            }
+
+            AudioSource fallback = sources[nextIndex % sources.Count];
+            nextIndex = (nextIndex + 1) % sources.Count;
+            return fallback;
+        }
+
+        private void Awake()
+        {
+            EnsureInitialized();
+        }
+
+        private void EnsureInitialized()
+        {
+            if (sources.Count > 0) return;
+
+            for (int i = 0; i < DEFAULT_POOL_SIZE; i++)
+            {
+                GameObject audioObject = new GameObject($"AttackSoundSource_{i + 1}");
+                audioObject.transform.SetParent(transform, false);
+
+                AudioSource source = audioObject.AddComponent<AudioSource>();
+                source.playOnAwake = false;
+                source.loop = false;
+                source.spatialBlend = 0.0f;
+                source.dopplerLevel = 0f;
+                source.rolloffMode = AudioRolloffMode.Linear;
+
+                sources.Add(source);
+            }
+        }
+    }
+
     #endregion
 
     #region Main Plugin Class
@@ -112,9 +163,10 @@ namespace AtlyssAttackSounds
     {
         public const string GUID = "scrithor_Atlyss.Attack.Sounds";
         public const string NAME = "AtlyssAttackSounds";
-        public const string VERSION = "1.1.0";
+        public const string VERSION = "1.1.1";
 
         public const float COOLDOWN_BUFFER = 0.2f;
+        private const float MIN_SOUND_INTERVAL = 0.03f;
 
         public static bool FORCE_SLOW_TEST_MODE = false;
 
@@ -136,6 +188,24 @@ namespace AtlyssAttackSounds
         public static ConfigEntry<string> particleStartColorsConfig;
 
         private static ConfigEntry<KeyboardShortcut> toggleMenuKeyConfig;
+
+        // Delays individuais por categoria de arma (Funciona!)
+        public static ConfigEntry<float> delayScepterGrounded;
+        public static ConfigEntry<float> delayScepterAir;
+        public static ConfigEntry<float> delayBowGrounded;
+        public static ConfigEntry<float> delayBowAir;
+        public static ConfigEntry<float> delayGreatbladeGrounded;
+        public static ConfigEntry<float> delayGreatbladeAir;
+        public static ConfigEntry<float> delayBladeGrounded;
+        public static ConfigEntry<float> delayBladeAir;
+        public static ConfigEntry<float> delayPolearmGrounded;
+        public static ConfigEntry<float> delayPolearmAir;
+        public static ConfigEntry<float> delayBellGrounded;
+        public static ConfigEntry<float> delayBellAir;
+        public static ConfigEntry<float> delayKatarGrounded;
+        public static ConfigEntry<float> delayKatarAir;
+        public static ConfigEntry<float> delayDefaultGrounded;
+        public static ConfigEntry<float> delayDefaultAir;
 
         #endregion
 
@@ -164,7 +234,17 @@ namespace AtlyssAttackSounds
 
         private static GameObject particlePrefab;
         private static readonly System.Random random = new System.Random();
+
+        private static readonly FieldInfo playerCombatField = AccessTools.Field(typeof(Player), "_pCombat");
+        private static readonly FieldInfo playerVisualField = AccessTools.Field(typeof(Player), "_pVisual");
+        private static readonly FieldInfo playerActionField = AccessTools.Field(typeof(Player), "_currentPlayerAction");
+        private static readonly FieldInfo currentSwingStateField = AccessTools.Field(typeof(PlayerCombat), "_currentSwingState");
+        private static readonly FieldInfo visualAnimatorField = AccessTools.Field(typeof(PlayerVisual), "_visualAnimator");
+        private static readonly FieldInfo equippedWeaponField = AccessTools.Field(typeof(PlayerCombat), "_equippedWeapon");
+
         private static float nextAllowedTime;
+        private static float lastAttackTriggerTime;
+        private static float currentAttackCooldown;
 
         private Harmony harmony;
         private bool wasToggleKeyPressed;
@@ -242,7 +322,7 @@ namespace AtlyssAttackSounds
         private void InitConfiguration()
         {
             volumeFastConfig = Config.Bind("Audio Volumes", "Volume_Fast", 1.0f, new ConfigDescription("Fast audio volume.", new AcceptableValueRange<float>(0.0f, 1.0f)));
-            volumeMediumConfig = Config.Bind("Audio Volumes", "Volume_Medium", 0.25f, new ConfigDescription("Medium audio volume.", new AcceptableValueRange<float>(0.0f, 1.0f)));
+            volumeMediumConfig = Config.Bind("Audio Volumes", "Volume_Medium", 0.85f, new ConfigDescription("Medium audio volume.", new AcceptableValueRange<float>(0.0f, 1.0f)));
             volumeSlowConfig = Config.Bind("Audio Volumes", "Volume_Slow", 0.3f, new ConfigDescription("Slow audio volume.", new AcceptableValueRange<float>(0.0f, 1.0f)));
 
             chanceFastConfig = Config.Bind("Proc Chances", "Chance_Fast", 84.0f, new ConfigDescription("Relative weight for Fast sounds.", new AcceptableValueRange<float>(0.0f, 100.0f)));
@@ -254,6 +334,31 @@ namespace AtlyssAttackSounds
             particleStartColorsConfig = Config.Bind("Effects", "ParticleStartColors", "CFFF4E, 77F131, 349300", "Initial colors in Hexadecimal.");
 
             toggleMenuKeyConfig = Config.Bind("Settings Menu", "ToggleMenuKey", new KeyboardShortcut(KeyCode.F7), "Key to open/close the settings menu.");
+
+            // Inicialização dos Delays Customizáveis por Arma
+            delayScepterGrounded = Config.Bind("Weapon Delays", "Scepter_Grounded", 0.533f, "Delay para Scepter no chão");
+            delayScepterAir = Config.Bind("Weapon Delays", "Scepter_Air", 0.533f, "Delay para Scepter no ar");
+
+            delayBowGrounded = Config.Bind("Weapon Delays", "Bow_Grounded", 0.366f, "Delay para Bow no chão");
+            delayBowAir = Config.Bind("Weapon Delays", "Bow_Air", 0.366f, "Delay para Bow no ar");
+
+            delayGreatbladeGrounded = Config.Bind("Weapon Delays", "Greatblade_Grounded", 0.780f, "Delay para Greatblade no chão");
+            delayGreatbladeAir = Config.Bind("Weapon Delays", "Greatblade_Air", 0.993f, "Delay para Greatblade no ar");
+
+            delayBladeGrounded = Config.Bind("Weapon Delays", "Blade_Grounded", 0.460f, "Delay para Blade no chão");
+            delayBladeAir = Config.Bind("Weapon Delays", "Blade_Air", 0.980f, "Delay para Blade no ar");
+
+            delayPolearmGrounded = Config.Bind("Weapon Delays", "Polearm_Grounded", 0.490f, "Delay para Polearm no chão");
+            delayPolearmAir = Config.Bind("Weapon Delays", "Polearm_Air", 0.850f, "Delay para Polearm no ar");
+
+            delayBellGrounded = Config.Bind("Weapon Delays", "Bell_Grounded", 0.980f, "Delay para Bell no chão");
+            delayBellAir = Config.Bind("Weapon Delays", "Bell_Air", 0.633f, "Delay para Bell no ar");
+
+            delayKatarGrounded = Config.Bind("Weapon Delays", "Katar_Grounded", 0.266f, "Delay para Katar no chão");
+            delayKatarAir = Config.Bind("Weapon Delays", "Katar_Air", 0.720f, "Delay para Katar no ar");
+
+            delayDefaultGrounded = Config.Bind("Weapon Delays", "Default_Grounded", 0.400f, "Delay padrão para outras armas no chão");
+            delayDefaultAir = Config.Bind("Weapon Delays", "Default_Air", 0.500f, "Delay padrão para outras armas no ar");
         }
 
         private void LoadAssetBundle(string bundlePath)
@@ -362,15 +467,12 @@ namespace AtlyssAttackSounds
             {
                 try
                 {
-                    if (Time.time < nextAllowedTime) return;
-
                     Player player = __instance.GetComponent<Player>();
                     if (player == null || player != Player._mainPlayer) return;
 
-                    float appliedDelay = TriggerSoundEffect(player);
-                    if (appliedDelay > 0f)
+                    if (Instance != null)
                     {
-                        nextAllowedTime = Time.time + appliedDelay;
+                        Instance.StartCoroutine(ProcessAttackWithCustomDelay(player));
                     }
                 }
                 catch (Exception ex)
@@ -378,6 +480,113 @@ namespace AtlyssAttackSounds
                     logger.LogError($"[ERRO HOOK]: {ex}");
                 }
             }
+        }
+
+        private static IEnumerator ProcessAttackWithCustomDelay(Player player)
+        {
+            if (player == null) yield break;
+
+            if (Time.time - lastAttackTriggerTime < currentAttackCooldown)
+            {
+                yield break;
+            }
+
+            bool isAirAttack = !GetIsGrounded(player);
+            string weaponName = GetEquippedWeaponName(player);
+            float delay = GetAnimationDuration(weaponName, isAirAttack);
+
+            lastAttackTriggerTime = Time.time;
+            currentAttackCooldown = delay;
+
+            yield return new WaitForSeconds(delay);
+
+            if (player != null && player == Player._mainPlayer)
+            {
+                TryTriggerResolvedAttackEffect(player);
+            }
+        }
+
+        private static float GetAnimationDuration(string weaponName, bool isAirAttack)
+        {
+            string weaponKey = weaponName.ToLower();
+
+            if (weaponKey.Contains("scepter"))
+            {
+                return isAirAttack ? delayScepterAir.Value : delayScepterGrounded.Value;
+            }
+            if (weaponKey.Contains("bow"))
+            {
+                return isAirAttack ? delayBowAir.Value : delayBowGrounded.Value;
+            }
+            if (weaponKey.Contains("greatblade"))
+            {
+                return isAirAttack ? delayGreatbladeAir.Value : delayGreatbladeGrounded.Value;
+            }
+            if (weaponKey.Contains("blade"))
+            {
+                return isAirAttack ? delayBladeAir.Value : delayBladeGrounded.Value;
+            }
+            if (weaponKey.Contains("polearm"))
+            {
+                return isAirAttack ? delayPolearmAir.Value : delayPolearmGrounded.Value;
+            }
+            if (weaponKey.Contains("bell"))
+            {
+                return isAirAttack ? delayBellAir.Value : delayBellGrounded.Value;
+            }
+            if (weaponKey.Contains("katar"))
+            {
+                return isAirAttack ? delayKatarAir.Value : delayKatarGrounded.Value;
+            }
+
+            return isAirAttack ? delayDefaultAir.Value : delayDefaultGrounded.Value;
+        }
+
+        private static bool GetIsGrounded(Player player)
+        {
+            if (player == null) return true;
+
+            CharacterController controller = player.GetComponent<CharacterController>();
+            if (controller != null)
+            {
+                return controller.isGrounded;
+            }
+
+            Rigidbody rb = player.GetComponent<Rigidbody>();
+            if (rb != null)
+            {
+                return Mathf.Abs(rb.velocity.y) < 0.01f;
+            }
+
+            return true;
+        }
+
+        private static string GetEquippedWeaponName(Player player)
+        {
+            if (player == null || playerCombatField == null || equippedWeaponField == null) return string.Empty;
+
+            PlayerCombat playerCombat = playerCombatField.GetValue(player) as PlayerCombat;
+            if (playerCombat == null) return string.Empty;
+
+            object weaponObj = equippedWeaponField.GetValue(playerCombat);
+            if (weaponObj != null)
+            {
+                return weaponObj.ToString();
+            }
+
+            return string.Empty;
+        }
+
+        private static bool TryTriggerResolvedAttackEffect(Player player)
+        {
+            if (player == null || player != Player._mainPlayer) return false;
+            if (Time.time < nextAllowedTime) return false;
+
+            float appliedDelay = TriggerSoundEffect(player);
+            if (appliedDelay <= 0f) return false;
+
+            nextAllowedTime = Time.time + MIN_SOUND_INTERVAL;
+            return true;
         }
 
         private static float TriggerSoundEffect(Player player)
@@ -398,17 +607,12 @@ namespace AtlyssAttackSounds
 
             AudioClip selectedClip = pool[random.Next(pool.Count)];
 
-            AudioSource source = player.GetComponent<AudioSource>();
-            if (source == null)
-            {
-                source = player.GetComponentInChildren<AudioSource>();
-            }
-            if (source == null)
-            {
-                source = player.gameObject.AddComponent<AudioSource>();
-            }
+            AttackAudioPool audioPool = GetAudioPool(player);
+            if (audioPool == null) return 0f;
 
-            source.spatialBlend = 0.0f;
+            AudioSource source = audioPool.GetSource();
+            if (source == null) return 0f;
+
             float targetVolume = GetVolumeForCategory(targetCategory);
             source.PlayOneShot(selectedClip, targetVolume);
 
@@ -419,7 +623,21 @@ namespace AtlyssAttackSounds
                 TriggerParticleEffect(player);
             }
 
-            return selectedClip.length + COOLDOWN_BUFFER;
+            return selectedClip.length;
+        }
+
+        private static AttackAudioPool GetAudioPool(Player player)
+        {
+            if (player == null) return null;
+
+            AttackAudioPool existingPool = player.GetComponentInChildren<AttackAudioPool>(true);
+            if (existingPool != null) return existingPool;
+
+            GameObject poolObject = new GameObject("AttackSoundsAudioPool");
+            poolObject.transform.SetParent(player.transform, false);
+            poolObject.hideFlags = HideFlags.HideAndDontSave;
+
+            return poolObject.AddComponent<AttackAudioPool>();
         }
 
         private static void TriggerJiggleEffect(Player player)
